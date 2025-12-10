@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { Toast } from '../components/Toast';
 import fileService from '../services/fileService';
+import imageCompression from 'browser-image-compression';
 
 export const useFileHandling = (socketRef, currentUser, router, handleSessionError) => {
   const [filePreview, setFilePreview] = useState(null);
@@ -27,12 +28,42 @@ export const useFileHandling = (socketRef, currentUser, router, handleSessionErr
       setUploadError(null);
       setUploadProgress(0);
 
+      let fileToUpload = file;
+
+      // 이미지 파일 압축 
+      if (file.type.startsWith('image/')) {
+        try {
+          const compressedFile = await imageCompression(file, {
+            maxSizeMB: 0.5,          // 500KB 
+            maxWidthOrHeight: 1920, 
+            useWebWorker: true
+          });
+
+          fileToUpload = new File(
+            [compressedFile],
+            file.name,
+            { type: compressedFile.type }
+          );
+        } catch (compressionError) {
+          console.warn('이미지 압축 실패 → 원본 사용', compressionError);
+        }
+      }
+
+      console.log(
+        '업로드 파일 크기:',
+        Math.round(file.size / 1024),
+        'KB →',
+        Math.round(fileToUpload.size / 1024),
+        'KB'
+      );
+      
       const uploadResponse = await fileService.uploadFile(
-        file,
+        fileToUpload,   
         (progress) => setUploadProgress(progress),
         currentUser.token,
         currentUser.sessionId
       );
+
 
       if (!uploadResponse.success) {
         throw new Error(uploadResponse.message || '파일 업로드에 실패했습니다.');
