@@ -205,7 +205,7 @@ handleSocketError(error) {
       } else {
         this.cleanup(CLEANUP_REASONS.MANUAL);
       }
-    }, 25000);
+    }, 45000);
   }
 
   getSocket() {
