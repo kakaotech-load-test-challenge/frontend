@@ -56,7 +56,7 @@ export const useFileHandling = (socketRef, currentUser, router, handleSessionErr
         Math.round(fileToUpload.size / 1024),
         'KB'
       );
-      
+
       const uploadResponse = await fileService.uploadFile(
         fileToUpload,   
         (progress) => setUploadProgress(progress),
@@ -104,6 +104,13 @@ export const useFileHandling = (socketRef, currentUser, router, handleSessionErr
   }, [socketRef, currentUser, router, handleSessionError]);
 
   const handleFileSelect = useCallback(async (file) => {
+    if (!file) return;
+
+    const MAX_ORIGINAL_SIZE_MB = 10;
+
+    if (file.size > MAX_ORIGINAL_SIZE_MB * 1024 * 1024) {
+      throw new Error(`파일은 최대 ${MAX_ORIGINAL_SIZE_MB}MB까지만 업로드할 수 있어요.`);
+    }
     try {
       // 파일 유효성 검사
       const validationResult = await fileService.validateFile(file);
