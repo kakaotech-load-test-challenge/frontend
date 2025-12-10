@@ -213,9 +213,19 @@ handleSocketError(error) {
   }
 
   queueMessage(event, data) {
-    const message = { event, data, timestamp: Date.now() };
-    this.messageQueue.push(message);
+  const MAX_QUEUE_SIZE = 100; 
+  if (this.messageQueue.length >= MAX_QUEUE_SIZE) {
+    console.warn(
+      `[QUEUE] 최대 제한(${MAX_QUEUE_SIZE}) 도달 → 새로운 메시지 버림`,
+      event
+    );
+    return; 
   }
+
+  const message = { event, data, timestamp: Date.now() };
+  this.messageQueue.push(message);
+}
+
 
   processMessageQueue() {
   if (!this.socket?.connected) return;
