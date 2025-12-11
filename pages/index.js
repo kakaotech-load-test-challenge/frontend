@@ -108,6 +108,10 @@ const Login = () => {
 
     } catch (err) {
       setError(err.message || '로그인 처리 중 오류가 발생했습니다.');
+         // 로그인 실패 시 /login으로 명시적 이동 (E2E 테스트 대응)
+      if (router.pathname === '/') {
+        router.push('/login');
+      }
     } finally {
       setLoading(false);
     }
