@@ -175,7 +175,27 @@ const handleMessageSubmit = useCallback(async (messageData) => {
       setUploading(false);
     }
   }
-}, [currentUser, router, handleSessionError, socketRef]);
+  }, [currentUser, router, handleSessionError, socketRef]);
+
+  // 메시지 전송 쓰로틀 (300ms)
+  const throttledHandleMessageSubmit = useCallback(
+    (messageData) => {
+      const now = Date.now();
+
+      // 300ms 안에 또 호출되면 무시
+      if (
+        throttledHandleMessageSubmit.lastCall &&
+        now - throttledHandleMessageSubmit.lastCall < 300
+      ) {
+        return;
+      }
+
+      throttledHandleMessageSubmit.lastCall = now;
+
+      handleMessageSubmit(messageData); 
+    },
+    [handleMessageSubmit]
+  );
 
 
  const handleEmojiToggle = useCallback(() => {
@@ -239,7 +259,6 @@ const handleMessageSubmit = useCallback(async (messageData) => {
    setMentionIndex,
    setFilePreview,
    handleMessageChange,
-   handleMessageSubmit,
    handleEmojiToggle,
    handleLoadMore,
    getFilteredParticipants,
