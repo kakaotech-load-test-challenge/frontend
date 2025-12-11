@@ -6,7 +6,7 @@ const nextConfig = {
   output: 'export',
   
   // 👉 개발 환경에서는 /chat/ 자동 생성 방지
-  trailingSlash: true,
+  trailingSlash: false,
 
   images: {
     unoptimized: true,
@@ -19,7 +19,7 @@ const nextConfig = {
     buildActivityPosition: 'bottom-right'
   },
 
-  ...(true && {
+  ...(false && {
     experimental: {
       forceSwcTransforms: true
     }
