@@ -96,6 +96,24 @@ api.interceptors.request.use(
   error => Promise.reject(error)
 );
 
+api.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    // 백엔드에서 401 주면 로그인 페이지로 이동
+    if (error.response?.status === 401) {
+      // 유저 정보 제거
+      localStorage.removeItem('user');
+
+      if (typeof window !== "undefined") {
+        // 강제 리다이렉트 (router보다 안전함)
+        window.location.href = "/login";
+      }
+    }
+
+    return Promise.reject(error);
+  }
+);
+
 class AuthService {
   constructor() {
   }
