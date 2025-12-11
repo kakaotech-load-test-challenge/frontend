@@ -24,23 +24,39 @@ const FileMessage = ({
   room = null,
   socketRef
 }) => {
+
+  console.log("🐛 FileMessage 렌더링됨");
+  console.log("🐛 msg:", msg);
+  console.log("🐛 msg.file:", msg.file);
+  console.log("🐛 msg.fileUrl:", msg.fileUrl);
+
   const { user } = useAuth();
   const [error, setError] = useState(null);
   const [previewUrl, setPreviewUrl] = useState('');
   const messageDomRef = useRef(null);
+  console.log("🎯 useEffect 진입 직전 msg.file =", msg.file);
+  console.log("🎯 msg.fileUrl =", msg.fileUrl);
+
   useEffect(() => {
-    if (msg?.file) {
-      const url = fileService.getPreviewUrl(msg.file, user?.token, user?.sessionId, true);
-      setPreviewUrl(url);
-      console.debug('Preview URL generated:', {
-        filename: msg.file.filename,
-        url
-      });
-    }
-  }, [msg?.file, user?.token, user?.sessionId]);
+  console.log("🔄 useEffect 실행됨");
+
+  if (msg?.fileUrl) {
+    console.log("➡️ S3 직접 업로드 URL 감지됨:", msg.fileUrl);
+    setPreviewUrl(msg.fileUrl);
+    return;
+  }
+
+  if (msg?.file) {
+    console.log("➡️ 백엔드 기반 파일 구조 감지됨:", msg.file);
+    const url = fileService.getPreviewUrl(msg.file, user?.token, user?.sessionId, true);
+    console.log("📸 previewUrl 계산됨:", url);
+    setPreviewUrl(url);
+  }
+}, [msg?.file, msg?.fileUrl, user?.token, user?.sessionId]);
+
 
   if (!msg?.file) {
-    console.error('File data is missing:', msg);
+     console.error("❌ [FileMessage] ERROR — msg.file 없음:", msg);
     return null;
   }
 
@@ -157,6 +173,11 @@ const FileMessage = ({
   };
 
   const renderImagePreview = (originalname) => {
+    console.log("🖼 renderImagePreview 호출됨");
+    console.log("🖼 previewUrl =", previewUrl);
+    console.log("🖼 msg.file =", msg.file);
+    console.log("🖼 msg.fileUrl =", msg.fileUrl);
+
     try {
       if (!msg?.file?.filename) {
         return (
@@ -207,6 +228,11 @@ const FileMessage = ({
   };
 
   const renderFilePreview = () => {
+     console.log("🎨 [FileMessage] renderFilePreview()", {
+    mimetype: msg.file?.mimetype,
+    filename: msg.file?.filename,
+    originalname: msg.file?.originalname,
+  });
     const mimetype = msg.file?.mimetype || '';
     const originalname = getDecodedFilename(msg.file?.originalname || 'Unknown File');
     const size = fileService.formatFileSize(msg.file?.size || 0);

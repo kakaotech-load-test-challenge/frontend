@@ -75,7 +75,9 @@ const ChatMessages = ({
     });
   }, [messages]);
 
+  console.log("📨 [ChatMessages] messages =", messages);
   const renderMessage = useCallback((msg, idx) => {
+     console.log("🔍 renderMessage 호출됨 idx:", idx, "msg:", msg);
     if (!msg) return null;
 
     const commonProps = {
@@ -89,6 +91,8 @@ const ChatMessages = ({
       system: SystemMessage,
       file: FileMessage
     }[msg.type] || UserMessage;
+
+     console.log("🧩 MessageComponent 선택됨:", msg.type, MessageComponent.name);
 
     return (
       <MessageComponent

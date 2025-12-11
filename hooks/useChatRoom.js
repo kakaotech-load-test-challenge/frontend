@@ -92,7 +92,7 @@ export const useChatRoom = () => {
     }
 
     loadMoreTimeoutRef.current = setTimeout(() => {
-      handleLoadMore();                 
+      handleLoadMore;                 
     }, 300);
   }, [loadingMessages, hasMoreMessages, handleLoadMore]);
 
