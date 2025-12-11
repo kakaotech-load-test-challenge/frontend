@@ -19,7 +19,7 @@ const nextConfig = {
     buildActivityPosition: 'bottom-right'
   },
 
-  ...(isDev && {
+  ...(true && {
     experimental: {
       forceSwcTransforms: true
     }
