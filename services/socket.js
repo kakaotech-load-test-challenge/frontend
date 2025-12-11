@@ -46,7 +46,7 @@ class SocketService {
           reconnectionDelay: this.retryDelay,
           reconnectionDelayMax: 5000,
           timeout: 20000,
-          forceNew: true
+          forceNew: false,
         });
 
         this.setupEventHandlers(resolve, reject);
@@ -160,10 +160,6 @@ class SocketService {
 
   disconnect() {
     this.cleanup(CLEANUP_REASONS.MANUAL);
-    if (this.socket) {
-      this.socket.disconnect();
-      this.socket = null;
-    }
   }
 
   handleConnectionError(error) {
@@ -185,11 +181,12 @@ class SocketService {
     }
   }
 
-  handleSocketError(error) {
-    if (error.type === 'TransportError') {
-      this.reconnect();
-    }
+handleSocketError(error) {
+  if (error.type === 'TransportError') {
+    console.warn('Socket transport error, waiting for auto reconnect:', error.message);
   }
+}
+
 
   startHeartbeat() {
     if (this.heartbeatInterval) {
@@ -200,13 +197,15 @@ class SocketService {
       if (this.socket?.connected) {
         this.socket.emit('ping', null, (error) => {
           if (error) {
-            this.cleanup(CLEANUP_REASONS.MANUAL);
+            console.warn('Heartbeat ping failed:', error?.message);
+            // ✅ socket.io 자동 reconnect에 맡김
           }
         });
+
       } else {
         this.cleanup(CLEANUP_REASONS.MANUAL);
       }
-    }, 25000);
+    }, 45000);
   }
 
   getSocket() {
@@ -214,25 +213,39 @@ class SocketService {
   }
 
   queueMessage(event, data) {
-    const message = { event, data, timestamp: Date.now() };
-    this.messageQueue.push(message);
+  const MAX_QUEUE_SIZE = 100; 
+  if (this.messageQueue.length >= MAX_QUEUE_SIZE) {
+    console.warn(
+      `[QUEUE] 최대 제한(${MAX_QUEUE_SIZE}) 도달 → 새로운 메시지 버림`,
+      event
+    );
+    return; 
   }
+
+  const message = { event, data, timestamp: Date.now() };
+  this.messageQueue.push(message);
+}
+
 
   processMessageQueue() {
-    const now = Date.now();
-    const validMessages = this.messageQueue.filter(msg => now - msg.timestamp < 300000);
+  if (!this.socket?.connected) return;
 
-    while (validMessages.length > 0) {
-      const message = validMessages.shift();
-      try {
-        this.socket.emit(message.event, message.data);
-      } catch (error) {
-        // Silent error handling
-      }
+  const now = Date.now();
+
+  const validMessages = this.messageQueue.filter(
+    msg => now - msg.timestamp < 300000
+  );
+
+  this.messageQueue = []; 
+
+  for (const message of validMessages) {
+    try {
+      this.socket.emit(message.event, message.data);
+    } catch {
+      this.messageQueue.push(message);
     }
-
-    this.messageQueue = validMessages;
   }
+}
 
   async emit(event, data) {
     try {
@@ -283,26 +296,6 @@ class SocketService {
     this.socket.off(event, callback);
   }
 
-  async reconnect() {
-    if (this.isReconnecting) return;
-
-    this.isReconnecting = true;
-    this.cleanup(CLEANUP_REASONS.RECONNECT);
-
-    if (this.socket) {
-      this.socket.disconnect();
-      this.socket = null;
-    }
-
-    try {
-      await new Promise(resolve => setTimeout(resolve, this.retryDelay));
-      await this.connect();
-    } catch (error) {
-      this.isReconnecting = false;
-      throw error;
-    }
-  }
-
   isConnected() {
     return this.connected && this.socket?.connected;
   }
@@ -310,7 +303,7 @@ class SocketService {
   getConnectionQuality() {
     if (!this.socket?.connected) return 'disconnected';
     if (this.isReconnecting) return 'reconnecting';
-    if (this.socket.conn?.transport?.name === 'polling') return 'poor';
+    if (th저s.socket.conn?.transport?.name === 'polling') return 'poor';
     return 'good';
   }
 

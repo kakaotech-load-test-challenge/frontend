@@ -1,6 +1,7 @@
 import { useState, useCallback } from 'react';
 import { Toast } from '../components/Toast';
-import fileService from '../services/fileService';
+import imageCompression from 'browser-image-compression';
+import { uploadToS3 } from '@/services/s3Upload';
 
 export const useMessageHandling = (socketRef, currentUser, router, handleSessionError, messages = [], loadingMessages = false, setLoadingMessages) => {
  const [message, setMessage] = useState('');
@@ -64,81 +65,135 @@ export const useMessageHandling = (socketRef, currentUser, router, handleSession
     });
   }, [socketRef, router?.query?.room, loadingMessages, messages, setLoadingMessages]);
 
- const handleMessageSubmit = useCallback(async (messageData) => {
-   if (!socketRef.current?.connected || !currentUser) {
-     Toast.error('채팅 서버와 연결이 끊어졌습니다.');
-     return;
-   }
+  const handleMessageSubmit = useCallback(async (messageData) => {
+  if (!socketRef.current?.connected || !currentUser) {
+    Toast.error('채팅 서버와 연결이 끊어졌습니다.');
+    return;
+  }
 
-   const roomId = router?.query?.room;
-   if (!roomId) {
-     Toast.error('채팅방 정보를 찾을 수 없습니다.');
-     return;
-   }
+  const roomId = router?.query?.room;
+  if (!roomId) {
+    Toast.error('채팅방 정보를 찾을 수 없습니다.');
+    return;
+  }
 
-   try {
-      if (messageData.type === 'file') {
-        setUploading(true);
-        setUploadError(null);
-        setUploadProgress(0);
+  try {
 
-        const uploadResponse = await fileService.uploadFile(
-          messageData.fileData.file,
-          (progress) => setUploadProgress(progress),
-          currentUser.token,
-          currentUser.sessionId
-        );
+    if (messageData.type === 'file') {
+      setUploading(true);
+      setUploadError(null);
+      setUploadProgress(0);
 
-       if (!uploadResponse.success) {
-         throw new Error(uploadResponse.message || '파일 업로드에 실패했습니다.');
-       }
+      const originalFile = messageData.fileData.file;
+      let fileToUpload = originalFile;
 
-       socketRef.current.emit('chatMessage', {
-         room: roomId,
-         type: 'file',
-         content: messageData.content || '',
-         fileData: {
-           _id: uploadResponse.data.file._id,
-           filename: uploadResponse.data.file.filename,
-           originalname: uploadResponse.data.file.originalname,
-           mimetype: uploadResponse.data.file.mimetype,
-           size: uploadResponse.data.file.size
-         }
-       });
+      // 이미지 파일 압축 
+      if (originalFile.type.startsWith('image/')) {
+        try {
+          const compressed = await imageCompression(originalFile, {
+            maxSizeMB: 0.5,          // 500KB
+            maxWidthOrHeight: 1920,  // 최대 해상도 제한
+            useWebWorker: true
+          });
 
-       setFilePreview(null);
-       setMessage('');
-       setUploading(false);
-       setUploadProgress(0);
+          fileToUpload = new File([compressed], originalFile.name, {
+            type: compressed.type
+          });
 
-     } else if (messageData.content?.trim()) {
-       socketRef.current.emit('chatMessage', {
-         room: roomId,
-         type: 'text',
-         content: messageData.content.trim()
-       });
+          console.log(
+            '이미지 압축:',
+            Math.round(originalFile.size / 1024),
+            'KB →',
+            Math.round(fileToUpload.size / 1024),
+            'KB'
+          );
+        } catch (compressionError) {
+          console.warn('이미지 압축 실패 → 원본 사용', compressionError);
+        }
+      }
 
-       setMessage('');
-     }
+      // S3로 업로드
+      const { url, key } = await uploadToS3(
+        fileToUpload,
+        currentUser.token,
+        currentUser.sessionId
+      );
 
-     setShowEmojiPicker(false);
-     setShowMentionList(false);
+      socketRef.current.emit('chatMessage', {
+        room: roomId,
+        type: 'file',
+        content: messageData.content || '',
+        fileData: {
+          url,
+          key,
+          filename: originalFile.name,
+          mimetype: fileToUpload.type,
+          size: fileToUpload.size
+        }
+      });
 
-   } catch (error) {
-     if (error.message?.includes('세션') || 
-         error.message?.includes('인증') || 
-         error.message?.includes('토큰')) {
-       await handleSessionError();
-       return;
-     }
 
-     Toast.error(error.message || '메시지 전송 중 오류가 발생했습니다.');
-     if (messageData.type === 'file') {
-       setUploadError(error.message);
-       setUploading(false);
-     }
-   }
- }, [currentUser, router, handleSessionError, socketRef]);
+      setFilePreview(null);
+      setMessage('');
+      setUploading(false);
+      setUploadProgress(0);
+      setShowEmojiPicker(false);
+      setShowMentionList(false);
+
+      return;
+    }
+
+    if (messageData.content?.trim()) {
+      socketRef.current.emit('chatMessage', {
+        room: roomId,
+        type: 'text',
+        content: messageData.content.trim()
+      });
+
+      setMessage('');
+      setShowEmojiPicker(false);
+      setShowMentionList(false);
+    }
+
+  } catch (error) {
+    if (
+      error.message?.includes('세션') ||
+      error.message?.includes('인증') ||
+      error.message?.includes('토큰')
+    ) {
+      await handleSessionError();
+      return;
+    }
+
+    Toast.error(error.message || '메시지 전송 중 오류가 발생했습니다.');
+
+    if (messageData.type === 'file') {
+      setUploadError(error.message);
+      setUploading(false);
+    }
+  }
+  }, [currentUser, router, handleSessionError, socketRef]);
+
+  // 메시지 전송 쓰로틀 (300ms)
+  const throttledHandleMessageSubmit = useCallback(
+    (messageData) => {
+      const now = Date.now();
+
+      // 300ms 안에 또 호출되면 무시
+      if (
+        throttledHandleMessageSubmit.lastCall &&
+        now - throttledHandleMessageSubmit.lastCall < 300
+      ) {
+        return;
+      }
+
+      throttledHandleMessageSubmit.lastCall = now;
+
+      handleMessageSubmit(messageData); 
+    },
+    [handleMessageSubmit]
+  );
+
 
  const handleEmojiToggle = useCallback(() => {
    setShowEmojiPicker(prev => !prev);
@@ -201,7 +256,7 @@ export const useMessageHandling = (socketRef, currentUser, router, handleSession
    setMentionIndex,
    setFilePreview,
    handleMessageChange,
-   handleMessageSubmit,
+   handleMessageSubmit: throttledHandleMessageSubmit,
    handleEmojiToggle,
    handleLoadMore,
    getFilteredParticipants,
