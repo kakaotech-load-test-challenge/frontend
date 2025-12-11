@@ -1,5 +1,4 @@
 /** @type {import('next').NextConfig} */
-const isDev = process.env.NODE_ENV === 'development';
 
 const nextConfig = {
   reactStrictMode: false,
@@ -7,7 +6,7 @@ const nextConfig = {
   output: 'export',
   
   // 👉 개발 환경에서는 /chat/ 자동 생성 방지
-  trailingSlash: isDev ? false : true,
+  trailingSlash: true,
 
   images: {
     unoptimized: true,
