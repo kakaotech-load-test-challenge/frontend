@@ -114,7 +114,6 @@ const ChatMessages = ({
       aria-atomic="false"
       data-testid="chat-messages-container"
     >
-      {/* Sentinel 요소 - 스크롤 맨 위에 배치하여 위로 스크롤 시 이전 메시지 로드 */}
       {hasMoreMessages && (
         <div
           ref={sentinelRef}

@@ -94,29 +94,24 @@ const ChatInput = forwardRef(({
   }, [handleFileValidationAndPreview]);
 
   const handleSubmit = useCallback(async (e) => {
+    console.log("파일 전송")
     e?.preventDefault();
 
     if (files.length > 0) {
-      try {
-        const file = files[0];
-        if (!file || !file.file) {
-          throw new Error('파일이 선택되지 않았습니다.');
-        }
+      const fileObj = files[0];
 
-        onSubmit({
-          type: 'file',
-          content: message.trim(),
-          fileData: file
-        });
+      onSubmit({
+        type: 'file',
+        file: fileObj.file,     
+        content: message.trim()
+      });
 
-        setMessage('');
-        setFiles([]);
+      setMessage('');
+      setFiles([]);
+      return;
+    }
 
-      } catch (error) {
-        console.error('File submit error:', error);
-        setUploadError(error.message);
-      }
-    } else if (message.trim()) {
+    if (message.trim()) {
       onSubmit({
         type: 'text',
         content: message.trim()

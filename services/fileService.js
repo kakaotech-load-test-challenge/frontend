@@ -76,77 +76,70 @@ class FileService {
 
   async uploadFile(file, onProgress, token, sessionId) {
     const validationResult = await this.validateFile(file);
-    if (!validationResult.success) {
-      return validationResult;
-    }
+    if (!validationResult.success) return validationResult;
 
-    try {
-      const formData = new FormData();
-      formData.append('file', file);
+    const isImage = file.type.startsWith("image/");
 
-      const source = CancelToken.source();
-      this.activeUploads.set(file.name, source);
-
-      const uploadUrl = this.baseUrl ?
-        `${this.baseUrl}/api/files/upload` :
-        '/api/files/upload';
-
-      // token과 sessionId는 axios 인터셉터에서 자동으로 추가되므로
-      // 여기서는 명시적으로 전달하지 않아도 됩니다
-      const response = await axiosInstance.post(uploadUrl, formData, {
-        headers: {
-          'Content-Type': 'multipart/form-data'
-        },
-        cancelToken: source.token,
-        withCredentials: true,
-        onUploadProgress: (progressEvent) => {
-          if (onProgress) {
-            const percentCompleted = Math.round(
-              (progressEvent.loaded * 100) / progressEvent.total
-            );
-            onProgress(percentCompleted);
-          }
-        }
-      });
-
-      this.activeUploads.delete(file.name);
-
-      if (!response.data || !response.data.success) {
-        return {
-          success: false,
-          message: response.data?.message || '파일 업로드에 실패했습니다.'
-        };
-      }
-
-      const fileData = response.data.file;
-      return {
-        success: true,
-        data: {
-          ...response.data,
-          file: {
-            ...fileData,
-            url: this.getFileUrl(fileData.filename, true)
-          }
-        }
-      };
-
-    } catch (error) {
-      this.activeUploads.delete(file.name);
-
-      if (isCancel(error)) {
-        return {
-          success: false,
-          message: '업로드가 취소되었습니다.'
-        };
-      }
-
-      if (error.response?.status === 401) {
-        throw new Error('Authentication expired. Please login again.');
-      }
-
-      return this.handleUploadError(error);
+    if (isImage) {
+      return await this.uploadImageToS3(file, onProgress, token, sessionId);
+    } else {
+      return await this.uploadFileToBackend(file, onProgress);
     }
   }
+
+  async uploadImageToS3(file) {
+    console.log("[S3] Upload start:", file.name, file.type, file.size);
+    console.log("[S3] Upload URL:", uploadUrl);
+
+    const fileName = `${Date.now()}_${file.name}`;
+    const s3Url = `https://ktb-s3-bucket-image-016.s3.ap-northeast-2.amazonaws.com/${fileName}`;
+
+    console.log("[DIRECT UPLOAD] uploading →", s3Url);
+
+    const res = await fetch(s3Url, {
+      method: "PUT",
+      headers: {
+        "Content-Type": file.type,
+      },
+      body: file,
+    });
+
+    if (!res.ok) {
+      throw new Error("S3 업로드 실패됨: " + res.status);
+    }
+
+    return {
+      url: s3Url,
+      name: fileName,
+      size: file.size,
+      mimeType: file.type,
+    };
+  }
+
+  async uploadFileToBackend(file, onProgress) {
+  const formData = new FormData();
+  formData.append("file", file);
+
+  const uploadUrl = `${this.baseUrl}/api/files/upload`;
+
+  const response = await axiosInstance.post(uploadUrl, formData, {
+    headers: { "Content-Type": "multipart/form-data" },
+    onUploadProgress: (e) => {
+      if (onProgress) {
+        const percent = Math.round((e.loaded * 100) / e.total);
+        onProgress(percent);
+      }
+    }
+  });
+
+  return {
+    success: true,
+    data: response.data
+  };
+}
+
+
+
   async downloadFile(filename, originalname, token, sessionId) {
     try {
       // 파일 존재 여부 먼저 확인
