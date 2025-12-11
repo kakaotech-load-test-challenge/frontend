@@ -100,6 +100,36 @@ export const useReactionHandling = (socketRef, currentUser, messages, setMessage
     }
   }, [socketRef, currentUser, messages, setMessages]);
 
+  // 리액션 쓰로틀 (500ms)
+const throttledReactionAdd = useCallback((messageId, reaction) => {
+  const now = Date.now();
+
+  if (
+    throttledReactionAdd.lastCall &&
+    now - throttledReactionAdd.lastCall < 500
+  ) {
+    return;
+  }
+
+  throttledReactionAdd.lastCall = now;
+  handleReactionAdd(messageId, reaction);
+}, [handleReactionAdd]);
+
+const throttledReactionRemove = useCallback((messageId, reaction) => {
+  const now = Date.now();
+
+  if (
+    throttledReactionRemove.lastCall &&
+    now - throttledReactionRemove.lastCall < 500
+  ) {
+    return;
+  }
+
+  throttledReactionRemove.lastCall = now;
+  handleReactionRemove(messageId, reaction);
+}, [handleReactionRemove]);
+
+
   const handleReactionUpdate = useCallback(({ messageId, reactions }) => {
     setMessages(prevMessages => 
       prevMessages.map(msg => 
@@ -109,8 +139,8 @@ export const useReactionHandling = (socketRef, currentUser, messages, setMessage
   }, [setMessages]);
 
   return {
-    handleReactionAdd,
-    handleReactionRemove,
+    handleReactionAdd :throttledReactionAdd,
+    handleReactionRemove: throttledReactionRemove,
     handleReactionUpdate
   };
 };

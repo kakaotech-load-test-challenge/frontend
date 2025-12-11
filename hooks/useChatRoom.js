@@ -82,6 +82,21 @@ export const useChatRoom = () => {
     removeFilePreview
   } = useMessageHandling(socketRef, currentUser, router, undefined, messages, loadingMessages, setLoadingMessages);
 
+  const safeHandleLoadMore = useCallback(() => {
+    if (loadingMessages) return;        
+    if (!hasMoreMessages) return;       
+
+    // 디바운싱 처리 (300ms)
+    if (loadMoreTimeoutRef.current) {
+      clearTimeout(loadMoreTimeoutRef.current);
+    }
+
+    loadMoreTimeoutRef.current = setTimeout(() => {
+      handleLoadMore();                 
+    }, 300);
+  }, [loadingMessages, hasMoreMessages, handleLoadMore]);
+
+
   // Cleanup 함수 수정
   const cleanup = useCallback((reason = 'MANUAL') => {
     if (!mountedRef.current || !router.query.room) return;
@@ -549,7 +564,7 @@ export const useChatRoom = () => {
     removeFilePreview,
     handleReactionAdd,
     handleReactionRemove,
-    handleLoadMore, // 페이징 핸들러 추가
+    handleLoadMore: safeHandleLoadMore, // 페이징 핸들러 추가
     cleanup,
 
     // Setters
