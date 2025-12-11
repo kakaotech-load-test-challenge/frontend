@@ -1,7 +1,7 @@
 import { useState, useCallback } from 'react';
 import { Toast } from '../components/Toast';
-import fileService from '../services/fileService';
 import imageCompression from 'browser-image-compression';
+import { uploadToS3 } from '@/services/s3Upload';
 
 export const useMessageHandling = (socketRef, currentUser, router, handleSessionError, messages = [], loadingMessages = false, setLoadingMessages) => {
  const [message, setMessage] = useState('');
@@ -65,7 +65,7 @@ export const useMessageHandling = (socketRef, currentUser, router, handleSession
     });
   }, [socketRef, router?.query?.room, loadingMessages, messages, setLoadingMessages]);
 
-const handleMessageSubmit = useCallback(async (messageData) => {
+  const handleMessageSubmit = useCallback(async (messageData) => {
   if (!socketRef.current?.connected || !currentUser) {
     Toast.error('채팅 서버와 연결이 끊어졌습니다.');
     return;
@@ -112,29 +112,26 @@ const handleMessageSubmit = useCallback(async (messageData) => {
         }
       }
 
-      const uploadResponse = await fileService.uploadFile(
+      // S3로 업로드
+      const { url, key } = await uploadToS3(
         fileToUpload,
-        (progress) => setUploadProgress(progress),
         currentUser.token,
         currentUser.sessionId
       );
-
-      if (!uploadResponse.success) {
-        throw new Error(uploadResponse.message || '파일 업로드에 실패했습니다.');
-      }
 
       socketRef.current.emit('chatMessage', {
         room: roomId,
         type: 'file',
         content: messageData.content || '',
         fileData: {
-          _id: uploadResponse.data.file._id,
-          filename: uploadResponse.data.file.filename,
-          originalname: uploadResponse.data.file.originalname,
-          mimetype: uploadResponse.data.file.mimetype,
-          size: uploadResponse.data.file.size
+          url,
+          key,
+          filename: originalFile.name,
+          mimetype: fileToUpload.type,
+          size: fileToUpload.size
         }
       });
+
 
       setFilePreview(null);
       setMessage('');
@@ -259,6 +256,7 @@ const handleMessageSubmit = useCallback(async (messageData) => {
    setMentionIndex,
    setFilePreview,
    handleMessageChange,
+   handleMessageSubmit: throttledHandleMessageSubmit,
    handleEmojiToggle,
    handleLoadMore,
    getFilteredParticipants,
