@@ -56,7 +56,7 @@ export const useSocketHandling = (router, maxRetries = 5) => { // 최대 재시�
               
               // 재연결 성공 시 채팅방 재접속
               if (router?.query?.room) {
-                socketRef.current.emit('joinRoom', router.query.room);
+                socketRef.current.emit('joinRoom', { roomId: router.query.room });
               }
             }
           } catch (retryError) {
@@ -121,7 +121,7 @@ export const useSocketHandling = (router, maxRetries = 5) => { // 최대 재시�
         cleanup();
 
         if (router?.query?.room) {
-          socket.emit('joinRoom', router.query.room);
+          socket.emit('joinRoom', { roomId: router.query.room });
         }
       });
 

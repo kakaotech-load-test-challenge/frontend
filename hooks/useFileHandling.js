@@ -68,10 +68,13 @@ export const useFileHandling = (socketRef, currentUser, router, handleSessionErr
         type: file.type.startsWith("image/") ? "image" : "file",
         content: content || '',
         fileData: {
-          url: fileData.url,
+          url: fileData.url, // 원래 코드: url
+          fileUrl: fileData.url, // fileUrl도 함께 전송 (백엔드 호환성)
           filename: fileData.filename,
-          originalname: fileData.originalName,
-          mimetype: fileData.mimeType,
+          originalname: fileData.originalName, // 원래 코드: originalname
+          originalName: fileData.originalName, // originalName도 함께 전송 (백엔드 호환성)
+          mimetype: fileData.mimeType, // 원래 코드: mimetype
+          mimeType: fileData.mimeType, // mimeType도 함께 전송 (백엔드 호환성)
           size: fileData.size
         }
       });

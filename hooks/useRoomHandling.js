@@ -242,7 +242,7 @@ export const useRoomHandling = (
       socket.once('joinRoomError', handleError);
       socket.once('error', handleError);
 
-      socket.emit('joinRoom', roomId);
+      socket.emit('joinRoom', { roomId: roomId });
     });
   }, [socketRef, mountedRef, userRooms]);
 
@@ -341,17 +341,13 @@ export const useRoomHandling = (
         setError(null);
         messageRetryCountRef.current = 0;
 
-        // 1. Socket Setup
         socketRef.current = await setupSocket()
           .catch((error) => {
-            console.log('Socket setup error:', error);
             router.push('/_error');
           });
 
-        // 2. Fetch Room Data
         const roomData = await fetchRoomData(router.query.room);
         
-        // Ensure current user is included in participants for display
         if (currentUser && roomData.participants) {
           const isUserInParticipants = roomData.participants.some(p =>
             p._id === currentUser.id || p.id === currentUser.id
@@ -372,15 +368,12 @@ export const useRoomHandling = (
         
         setRoom(roomData);
 
-        // 3. Setup Event Listeners
         if (mountedRef.current) {
           setupEventListeners();
         }
 
-        // 4. Join Room and Load Messages
         if (mountedRef.current && socketRef.current?.connected) {
           await joinRoom(router.query.room);
-
           await loadInitialMessages(router.query.room);
         }
 

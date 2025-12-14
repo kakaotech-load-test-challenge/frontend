@@ -56,31 +56,37 @@ export const useChatRoom = () => {
     setConnected
   } = useSocketHandling(router);
 
-  // Message handling hook
+  // Message handling hook (handleSessionError는 나중에 설정)
   const {
     message,
     showEmojiPicker,
     showMentionList,
     mentionFilter,
     mentionIndex,
-    filePreview,
-    uploading,
-    uploadProgress,
-    uploadError,
     setMessage,
     setShowEmojiPicker,
     setShowMentionList,
     setMentionFilter,
     setMentionIndex,
-    setFilePreview,
     handleMessageChange,
-    handleMessageSubmit,
-    handleLoadMore,
-    handleEmojiToggle,
-    getFilteredParticipants,
-    insertMention,
-    removeFilePreview
-  } = useMessageHandling(socketRef, currentUser, router, undefined, messages, loadingMessages, setLoadingMessages);
+    handleMessageSubmit
+  } = useMessageHandling(socketRef, currentUser, router, undefined);
+
+  // 이전 메시지 로드 핸들러
+  const handleLoadMore = useCallback(() => {
+    if (loadingMessages) return;
+    if (!hasMoreMessages) return;
+    if (!socketRef.current?.connected) return;
+
+    setLoadingMessages(true);
+    const roomId = router?.query?.room;
+    if (roomId) {
+      socketRef.current.emit('loadPreviousMessages', {
+        room: roomId,
+        limit: 50
+      });
+    }
+  }, [loadingMessages, hasMoreMessages, socketRef, router?.query?.room]);
 
   const safeHandleLoadMore = useCallback(() => {
     if (loadingMessages) return;        
@@ -92,9 +98,51 @@ export const useChatRoom = () => {
     }
 
     loadMoreTimeoutRef.current = setTimeout(() => {
-      handleLoadMore;                 
+      handleLoadMore();                 
     }, 300);
   }, [loadingMessages, hasMoreMessages, handleLoadMore]);
+
+  // 이모지 피커 토글
+  const handleEmojiToggle = useCallback(() => {
+    setShowEmojiPicker(prev => !prev);
+  }, [setShowEmojiPicker]);
+
+  // 필터링된 참가자 목록 가져오기
+  const getFilteredParticipants = useCallback((room) => {
+    if (!room?.participants) return [];
+    const filter = mentionFilter.toLowerCase();
+    if (!filter) return room.participants;
+    return room.participants.filter(p => 
+      p.name?.toLowerCase().includes(filter)
+    );
+  }, [mentionFilter]);
+
+  // 멘션 삽입
+  const insertMention = useCallback((user) => {
+    if (!messageInputRef.current) return;
+    const cursorPosition = messageInputRef.current.selectionStart || message.length;
+    const textBeforeCursor = message.slice(0, cursorPosition);
+    const textAfterCursor = message.slice(cursorPosition);
+    const lastAtSymbol = textBeforeCursor.lastIndexOf('@');
+
+    if (lastAtSymbol !== -1) {
+      const newMessage = 
+        message.slice(0, lastAtSymbol) +
+        `@${user.name} ` +
+        textAfterCursor;
+
+      setMessage(newMessage);
+      setShowMentionList(false);
+
+      setTimeout(() => {
+        if (messageInputRef.current) {
+          const newPosition = lastAtSymbol + user.name.length + 2;
+          messageInputRef.current.focus();
+          messageInputRef.current.setSelectionRange(newPosition, newPosition);
+        }
+      }, 0);
+    }
+  }, [message, setMessage, setShowMentionList, messageInputRef]);
 
 
   // Cleanup 함수 수정
@@ -260,9 +308,10 @@ export const useChatRoom = () => {
       }));
     });
 
-    // 메시지 이벤트
     socketRef.current.on('message', message => {
-      if (!message || !mountedRef.current || messageProcessingRef.current || !message._id) return;
+      if (!message || !mountedRef.current || messageProcessingRef.current || !message._id) {
+        return;
+      }
       
       if (processedMessageIds.current.has(message._id)) {
         return;
@@ -272,7 +321,6 @@ export const useChatRoom = () => {
 
       setMessages(prev => {
         const isDuplicate = prev.some(msg => msg._id === message._id);
-
         if (isDuplicate) {
           return prev;
         }
@@ -280,9 +328,10 @@ export const useChatRoom = () => {
       });
     });
 
-    // 이전 메시지 이벤트 (previousMessages와 previousMessagesLoaded 둘 다 처리)
     const handlePreviousMessages = (response) => {
-      if (!mountedRef.current || messageProcessingRef.current) return;
+      if (!mountedRef.current || messageProcessingRef.current) {
+        return;
+      }
       
       try {
         messageProcessingRef.current = true;
@@ -368,70 +417,84 @@ export const useChatRoom = () => {
 
   // Socket connection monitoring
   useEffect(() => {
-    if (!socketRef.current || !currentUser) return;
+    if (!currentUser) return;
 
-    const handleConnect = () => {
-      if (!mountedRef.current) return;
-      setConnectionStatus('connected');
-      setConnected(true);
+    // socketRef.current가 설정되면 이벤트 리스너 등록
+    const setupSocketListeners = () => {
+      if (!socketRef.current) return;
 
-      if (router.query.room && !setupCompleteRef.current &&
-          !initializingRef.current && !isInitialized) {
-        socketInitializedRef.current = true;
-        setupRoom().catch(() => {
-          setError('채팅방 연결에 실패했습니다.');
-        });
+      const handleConnect = () => {
+        if (!mountedRef.current) return;
+        setConnectionStatus('connected');
+        setConnected(true);
+      };
+
+      const handleDisconnect = (reason) => {
+        if (!mountedRef.current) return;
+        setConnectionStatus('disconnected');
+        socketInitializedRef.current = false;
+        setupCompleteRef.current = false;
+      };
+
+      const handleError = (error) => {
+        if (!mountedRef.current) return;
+        setConnectionStatus('error');
+        setError('채팅 서버와의 연결이 끊어졌습니다.');
+      };
+
+      const handleReconnecting = (attemptNumber) => {
+        if (!mountedRef.current) return;
+        setConnectionStatus('connecting');
+      };
+
+      const handleReconnectSuccess = () => {
+        if (!mountedRef.current) return;
+        setConnectionStatus('connected');
+        setConnected(true);
+        setError('');
+
+        // 재연결 시 채팅방 재접속
+        if (router.query.room) {
+          setupRoom().catch(() => {
+            setError('채팅방 재연결에 실패했습니다.');
+          });
+        }
+      };
+
+      socketRef.current.on('connect', handleConnect);
+      socketRef.current.on('disconnect', handleDisconnect);
+      socketRef.current.on('connect_error', handleError);
+      socketRef.current.on('reconnecting', handleReconnecting);
+      socketRef.current.on('reconnect', handleReconnectSuccess);
+
+      setConnectionStatus(socketRef.current.connected ? 'connected' : 'disconnected');
+
+      return () => {
+        if (socketRef.current) {
+          socketRef.current.off('connect', handleConnect);
+          socketRef.current.off('disconnect', handleDisconnect);
+          socketRef.current.off('connect_error', handleError);
+          socketRef.current.off('reconnecting', handleReconnecting);
+          socketRef.current.off('reconnect', handleReconnectSuccess);
+        }
+      };
+    };
+
+    // 소켓이 이미 연결되어 있으면 리스너 설정
+    if (socketRef.current) {
+      return setupSocketListeners();
+    }
+
+    // 소켓이 없으면 짧은 간격으로 체크
+    const checkInterval = setInterval(() => {
+      if (socketRef.current) {
+        clearInterval(checkInterval);
+        setupSocketListeners();
       }
-    };
-
-    const handleDisconnect = (reason) => {
-      if (!mountedRef.current) return;
-      setConnectionStatus('disconnected');
-      socketInitializedRef.current = false;
-      setupCompleteRef.current = false;
-    };
-
-    const handleError = (error) => {
-      if (!mountedRef.current) return;
-      setConnectionStatus('error');
-      setError('채팅 서버와의 연결이 끊어졌습니다.');
-    };
-
-    const handleReconnecting = (attemptNumber) => {
-      if (!mountedRef.current) return;
-      setConnectionStatus('connecting');
-    };
-
-    const handleReconnectSuccess = () => {
-      if (!mountedRef.current) return;
-      setConnectionStatus('connected');
-      setConnected(true);
-      setError('');
-
-      // 재연결 시 채팅방 재접속
-      if (router.query.room) {
-        setupRoom().catch(() => {
-          setError('채팅방 재연결에 실패했습니다.');
-        });
-      }
-    };
-
-    socketRef.current.on('connect', handleConnect);
-    socketRef.current.on('disconnect', handleDisconnect);
-    socketRef.current.on('connect_error', handleError);
-    socketRef.current.on('reconnecting', handleReconnecting);
-    socketRef.current.on('reconnect', handleReconnectSuccess);
-
-    setConnectionStatus(socketRef.current.connected ? 'connected' : 'disconnected');
+    }, 100);
 
     return () => {
-      if (socketRef.current) {
-        socketRef.current.off('connect', handleConnect);
-        socketRef.current.off('disconnect', handleDisconnect);
-        socketRef.current.off('connect_error', handleError);
-        socketRef.current.off('reconnecting', handleReconnecting);
-        socketRef.current.off('reconnect', handleReconnectSuccess);
-      }
+      clearInterval(checkInterval);
     };
   }, [router.query.room, setupRoom, setConnected, currentUser, isInitialized, setError]);
 
@@ -507,17 +570,18 @@ export const useChatRoom = () => {
     };
   }, [router.query.room]);
 
-  // File handling hook
+  // File handling hook (handleSessionError는 나중에 설정)
   const {
+    filePreview,
+    uploading,
+    uploadProgress,
+    uploadError,
     fileInputRef,
-    uploading: fileUploading,
-    uploadProgress: fileUploadProgress,
-    uploadError: fileUploadError,
     handleFileUpload,
     handleFileSelect,
     handleFileDrop,
-    removeFilePreview: removeFile
-  } = useFileHandling(socketRef, currentUser, router);
+    removeFilePreview
+  } = useFileHandling(socketRef, currentUser, router, undefined);
 
   // Enter key handler
   const handleKeyDown = useCallback((e) => {

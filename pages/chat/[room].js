@@ -11,7 +11,6 @@ const ChatPage = () => {
   const {
     room,
     messages,
-    streamingMessages,
     connected,
     connectionStatus,
     messageLoadError,
@@ -142,7 +141,6 @@ const ChatPage = () => {
     return (
       <ChatMessages
         messages={messages}
-        streamingMessages={streamingMessages}
         currentUser={currentUser}
         room={room}
         onReactionAdd={handleReactionAdd}

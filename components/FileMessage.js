@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   PdfIcon as FileText,
   ImageIcon as Image,
@@ -25,38 +25,62 @@ const FileMessage = ({
   socketRef
 }) => {
 
-  console.log("🐛 FileMessage 렌더링됨");
-  console.log("🐛 msg:", msg);
-  console.log("🐛 msg.file:", msg.file);
-  console.log("🐛 msg.fileUrl:", msg.fileUrl);
-
   const { user } = useAuth();
   const [error, setError] = useState(null);
   const [previewUrl, setPreviewUrl] = useState('');
   const messageDomRef = useRef(null);
-  console.log("🎯 useEffect 진입 직전 msg.file =", msg.file);
-  console.log("🎯 msg.fileUrl =", msg.fileUrl);
+
+  const normalizeFileData = useCallback(() => {
+    if (msg?.fileUrl) {
+      return {
+        url: msg.fileUrl,
+        mimetype: msg?.file?.mimetype || msg?.file?.mimeType || msg?.mimetype || 'image/jpeg',
+        originalname: msg?.file?.originalname || msg?.file?.originalName || msg?.originalname || msg?.originalName || 'image',
+        size: msg?.file?.size || msg?.size || 0,
+        filename: msg?.file?.filename || msg?.filename || null
+      };
+    }
+
+    // 2. file 객체가 있는 경우
+    if (msg?.file) {
+      // 백엔드 FileResponse 구조: url, originalName, mimeType, size
+      // file.url 또는 file.fileUrl이 S3 URL인 경우 직접 사용
+      const fileUrl = msg.file.url || msg.file.fileUrl;
+      if (fileUrl && fileUrl.startsWith('http')) {
+        return {
+          url: fileUrl,
+          mimetype: msg.file.mimeType || msg.file.mimetype || 'image/jpeg', // 백엔드는 mimeType 우선
+          originalname: msg.file.originalName || msg.file.originalname || 'image', // 백엔드는 originalName 우선
+          size: msg.file.size || 0,
+          filename: msg.file.filename || null
+        };
+      }
+
+      // file.filename이 있는 경우 백엔드 API URL 생성
+      if (msg.file.filename) {
+        const url = fileService.getPreviewUrl(msg.file, user?.token, user?.sessionId, true);
+        return {
+          url: url,
+          mimetype: msg.file.mimeType || msg.file.mimetype || 'image/jpeg', // 백엔드는 mimeType 우선
+          originalname: msg.file.originalName || msg.file.originalname || 'image', // 백엔드는 originalName 우선
+          size: msg.file.size || 0,
+          filename: msg.file.filename
+        };
+      }
+    }
+
+    return null;
+  }, [msg, user?.token, user?.sessionId]);
+
+  const fileData = normalizeFileData();
 
   useEffect(() => {
-  console.log("🔄 useEffect 실행됨");
+    if (fileData?.url) {
+      setPreviewUrl(fileData.url);
+    }
+  }, [fileData]);
 
-  if (msg?.fileUrl) {
-    console.log("➡️ S3 직접 업로드 URL 감지됨:", msg.fileUrl);
-    setPreviewUrl(msg.fileUrl);
-    return;
-  }
-
-  if (msg?.file) {
-    console.log("➡️ 백엔드 기반 파일 구조 감지됨:", msg.file);
-    const url = fileService.getPreviewUrl(msg.file, user?.token, user?.sessionId, true);
-    console.log("📸 previewUrl 계산됨:", url);
-    setPreviewUrl(url);
-  }
-}, [msg?.file, msg?.fileUrl, user?.token, user?.sessionId]);
-
-
-  if (!msg?.file) {
-     console.error("❌ [FileMessage] ERROR — msg.file 없음:", msg);
+  if (!fileData) {
     return null;
   }
 
@@ -71,7 +95,7 @@ const FileMessage = ({
   }).replace(/\./g, '년').replace(/\s/g, ' ').replace('일 ', '일 ');
 
   const getFileIcon = () => {
-    const mimetype = msg.file?.mimetype || '';
+    const mimetype = fileData?.mimetype || '';
     const iconProps = { className: "w-5 h-5 flex-shrink-0" };
 
     if (mimetype.startsWith('image/')) return <Image {...iconProps} color="#00C853" />;
@@ -118,7 +142,20 @@ const FileMessage = ({
     setError(null);
 
     try {
-      if (!msg.file?.filename) {
+      // S3 URL인 경우 직접 다운로드
+      if (fileData?.url && fileData.url.startsWith('http') && !fileData.url.includes('/api/files/')) {
+        const link = document.createElement('a');
+        link.href = fileData.url;
+        link.download = fileData.originalname || 'download';
+        link.target = '_blank';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        return;
+      }
+
+      // 백엔드 API를 통한 다운로드
+      if (!fileData?.filename) {
         throw new Error('파일 정보가 없습니다.');
       }
 
@@ -126,7 +163,7 @@ const FileMessage = ({
         throw new Error('인증 정보가 없습니다.');
       }
 
-      const baseUrl = fileService.getFileUrl(msg.file.filename, false);
+      const baseUrl = fileService.getFileUrl(fileData.filename, false);
       const authenticatedUrl = `${baseUrl}?token=${encodeURIComponent(user?.token)}&sessionId=${encodeURIComponent(user?.sessionId)}&download=true`;
       
       const iframe = document.createElement('iframe');
@@ -150,7 +187,18 @@ const FileMessage = ({
     setError(null);
 
     try {
-      if (!msg.file?.filename) {
+      // S3 URL인 경우 직접 열기
+      if (fileData?.url && fileData.url.startsWith('http') && !fileData.url.includes('/api/files/')) {
+        const newWindow = window.open(fileData.url, '_blank');
+        if (!newWindow) {
+          throw new Error('팝업이 차단되었습니다. 팝업 차단을 해제해주세요.');
+        }
+        newWindow.opener = null;
+        return;
+      }
+
+      // 백엔드 API를 통한 보기
+      if (!fileData?.filename) {
         throw new Error('파일 정보가 없습니다.');
       }
 
@@ -158,7 +206,7 @@ const FileMessage = ({
         throw new Error('인증 정보가 없습니다.');
       }
 
-      const baseUrl = fileService.getFileUrl(msg.file.filename, true);
+      const baseUrl = fileService.getFileUrl(fileData.filename, true);
       const authenticatedUrl = `${baseUrl}?token=${encodeURIComponent(user?.token)}&sessionId=${encodeURIComponent(user?.sessionId)}`;
 
       const newWindow = window.open(authenticatedUrl, '_blank');
@@ -173,13 +221,9 @@ const FileMessage = ({
   };
 
   const renderImagePreview = (originalname) => {
-    console.log("🖼 renderImagePreview 호출됨");
-    console.log("🖼 previewUrl =", previewUrl);
-    console.log("🖼 msg.file =", msg.file);
-    console.log("🖼 msg.fileUrl =", msg.fileUrl);
-
     try {
-      if (!msg?.file?.filename) {
+      // previewUrl이 이미 설정되어 있으면 사용 (S3 URL 또는 백엔드 URL)
+      if (!previewUrl) {
         return (
           <div className="flex items-center justify-center h-full bg-gray-100">
             <Image className="w-8 h-8 text-gray-400" />
@@ -187,31 +231,19 @@ const FileMessage = ({
         );
       }
 
-      if (!user?.token || !user?.sessionId) {
-        throw new Error('인증 정보가 없습니다.');
-      }
-
-      const previewUrl = fileService.getPreviewUrl(msg.file, user?.token, user?.sessionId, true);
-
       return (
         <div className="bg-transparent-pattern">
           <img
             src={previewUrl}
             alt={originalname}
             className="max-w-[400px] max-h-[400px] object-cover object-center rounded-md"
-            onLoad={() => {
-              console.debug('Image loaded successfully:', originalname);
-            }}
             onError={(e) => {
-              console.error('Image load error:', {
-                error: e.error,
-                originalname
-              });
               e.target.onerror = null;
               e.target.src = '/images/placeholder-image.png';
               setError('이미지를 불러올 수 없습니다.');
             }}
             loading="lazy"
+            crossOrigin={previewUrl.includes('s3.amazonaws.com') ? 'anonymous' : undefined}
             data-testid="file-image-preview"
           />
         </div>
@@ -228,14 +260,9 @@ const FileMessage = ({
   };
 
   const renderFilePreview = () => {
-     console.log("🎨 [FileMessage] renderFilePreview()", {
-    mimetype: msg.file?.mimetype,
-    filename: msg.file?.filename,
-    originalname: msg.file?.originalname,
-  });
-    const mimetype = msg.file?.mimetype || '';
-    const originalname = getDecodedFilename(msg.file?.originalname || 'Unknown File');
-    const size = fileService.formatFileSize(msg.file?.size || 0);
+    const mimetype = fileData?.mimetype || '';
+    const originalname = getDecodedFilename(fileData?.originalname || 'Unknown File');
+    const size = fileService.formatFileSize(fileData?.size || 0);
 
     const previewWrapperClass = "overflow-hidden";
 
