@@ -1,40 +1,13 @@
-import React from "react";
-import { useRouter } from "next/router";
-import {
-  Box,
-  VStack,
-  HStack,
-  Button,
-  Text,
-  Callout,
-  Card,
-} from "@vapor-ui/core";
-import { ErrorCircleOutlineIcon, NetworkIcon } from "@vapor-ui/icons";
-import { withAuth } from "../../contexts/AuthContext";
-import { useChatRoom } from "../../hooks/useChatRoom";
-import ChatMessages from "@/components/ChatMessages";
-import ChatInput from "@/components/ChatInput";
-import ChatRoomInfo from "@/components/ChatRoomInfo";
+import React from 'react';
+import { Box, VStack, HStack, Button, Text, Callout, Card } from '@vapor-ui/core';
+import { ErrorCircleOutlineIcon, NetworkIcon } from '@vapor-ui/icons';
+import { withAuth } from '../../contexts/AuthContext';
+import { useChatRoom } from '../../hooks/useChatRoom';
+import ChatMessages from '@/components/ChatMessages';
+import ChatInput from '@/components/ChatInput';
+import ChatRoomInfo from '@/components/ChatRoomInfo';
 
 const ChatPage = () => {
-  const router = useRouter();
-  const { roomId } = router.query;
-
-  // 🔴 router 준비 전에는 아무 것도 하지 않음
-  if (!router.isReady) {
-    return null;
-  }
-
-  // 🔴 roomId 없으면 진입 불가
-  if (typeof roomId !== "string") {
-    return (
-      <Box padding="$400">
-        <Callout color="warning">채팅방 정보가 없습니다.</Callout>
-      </Box>
-    );
-  }
-
-  // ⭐ 핵심: roomId를 useChatRoom에 전달
   const {
     room,
     messages,
@@ -70,61 +43,151 @@ const ChatPage = () => {
     handleReactionRemove,
     loadingMessages,
     hasMoreMessages,
-    handleLoadMore,
-  } = useChatRoom(roomId); // ✅ 여기 중요
+    handleLoadMore // 페이징 핸들러 추가
+  } = useChatRoom();
 
-  /* ================== 이하 렌더 로직은 기존 그대로 ================== */
+
+  const renderLoadingState = () => (
+    <div className="chat-container">
+      <Card.Root className="chat-room-card">
+        <Card.Body style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <Box style={{ textAlign: 'center', marginTop: 'var(--vapor-space-500)' }}>
+            <div className="spinner-border mb-4" role="status">
+              <span className="visually-hidden">Loading...</span>
+            </div>
+            <br/>
+            <Text typography="heading5">채팅방 연결 중...</Text>
+          </Box>
+        </Card.Body>
+      </Card.Root>
+    </div>
+  );
+
+  const renderErrorState = () => (
+    <div className="chat-container">
+      <Card.Root className="chat-room-card">
+        <Card.Body style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
+          <Box style={{ marginBottom: 'var(--vapor-space-400)' }}>
+            <Callout color="danger">
+              <HStack alignItems="center" gap="$200">
+                <ErrorCircleOutlineIcon className="w-5 h-5" />
+                <Text>
+                  {error || '채팅방을 불러오는데 실패했습니다.'}
+                </Text>
+              </HStack>
+            </Callout>
+          </Box>
+          <Button
+            onClick={() => window.location.reload()}
+          >
+            다시 시도
+          </Button>
+        </Card.Body>
+      </Card.Root>
+    </div>
+  );
+
+  const renderContent = () => {
+    if (loading) {
+      return (
+        <div className="d-flex align-items-center justify-content-center p-4">
+          <div className="spinner-border spinner-border-sm me-2" role="status">
+            <span className="visually-hidden">Loading...</span>
+          </div>
+          <span>채팅방 연결 중...</span>
+        </div>
+      );
+    }
+
+    if (error) {
+      return (
+        <div className="d-flex flex-column align-items-center justify-content-center p-4">
+          <Callout color="danger" className="mb-4 d-flex align-items-center">
+            <ErrorCircleOutlineIcon className="w-5 h-5 me-2" />
+            <span>{error}</span>
+          </Callout>
+          <Button onClick={() => window.location.reload()}>
+            다시 시도
+          </Button>
+        </div>
+      );
+    }
+
+    if (connectionStatus === 'disconnected') {
+      return (
+        <Box style={{ margin: 'var(--vapor-space-400)' }}>
+          <Callout color="warning" className="d-flex align-items-center">
+            <NetworkIcon className="w-5 h-5 me-2" />
+            <span>연결이 끊어졌습니다. 재연결을 시도합니다...</span>
+          </Callout>
+        </Box>
+      );
+    }
+
+    if (messageLoadError) {
+      return (
+        <div className="d-flex flex-column align-items-center justify-content-center p-4">
+          <Callout color="danger" className="mb-4 d-flex align-items-center">
+            <ErrorCircleOutlineIcon className="w-5 h-5 me-2" />
+            <span>메시지 로딩 중 오류가 발생했습니다.</span>
+          </Callout>
+          <Button onClick={retryMessageLoad}>
+            메시지 다시 로드
+          </Button>
+        </div>
+      );
+    }
+
+    return (
+      <ChatMessages
+        messages={messages}
+        currentUser={currentUser}
+        room={room}
+        onReactionAdd={handleReactionAdd}
+        onReactionRemove={handleReactionRemove}
+        loadingMessages={loadingMessages}
+        hasMoreMessages={hasMoreMessages}
+        onLoadMore={handleLoadMore}
+        socketRef={socketRef}
+      />
+    );
+  };
 
   if (loading || !room) {
-    return (
-      <div className="chat-container">
-        <Card.Root className="chat-room-card">
-          <Card.Body
-            style={{
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-            }}
-          >
-            <Text typography="heading5">채팅방 연결 중...</Text>
-          </Card.Body>
-        </Card.Root>
-      </div>
-    );
+    return renderLoadingState();
   }
 
   if (error) {
-    return (
-      <div className="chat-container">
-        <Callout color="danger">
-          <HStack gap="$200">
-            <ErrorCircleOutlineIcon />
-            <Text>{error}</Text>
-          </HStack>
-        </Callout>
-        <Button onClick={() => window.location.reload()}>다시 시도</Button>
-      </div>
-    );
+    return renderErrorState();
   }
 
   return (
-    <VStack height="calc(100vh - 80px)">
-      <ChatRoomInfo room={room} connectionStatus={connectionStatus} />
+    <VStack
+      gap="$0"
+      // width="100%"
+      // maxWidth="1200px"
+      height="calc(100vh - 80px"
+      margin="0 auto"
+      style={{
+        backgroundColor: 'var(--vapor-color-surface-normal)'
+      }}
+    >
+      {/* 채팅방 정보 (참여자 목록 및 연결 상태) */}
+      <ChatRoomInfo
+        room={room}
+        connectionStatus={connectionStatus}
+      />
 
-      <VStack flex="1" overflow="hidden">
-        <ChatMessages
-          messages={messages}
-          currentUser={currentUser}
-          room={room}
-          onReactionAdd={handleReactionAdd}
-          onReactionRemove={handleReactionRemove}
-          loadingMessages={loadingMessages}
-          hasMoreMessages={hasMoreMessages}
-          onLoadMore={handleLoadMore}
-          socketRef={socketRef}
-        />
+      {/* 메시지 영역 */}
+      <VStack
+        className="flex-1"
+        overflow="hidden"
+        minHeight="0"
+      >
+        {renderContent()}
       </VStack>
 
+      {/* 입력 영역 */}
       <ChatInput
         message={message}
         onMessageChange={handleMessageChange}
@@ -133,7 +196,8 @@ const ChatPage = () => {
         fileInputRef={fileInputRef}
         messageInputRef={messageInputRef}
         filePreview={filePreview}
-        disabled={connectionStatus !== "connected"}
+        disabled={connectionStatus !== 'connected'}
+        uploading={false}
         showEmojiPicker={showEmojiPicker}
         showMentionList={showMentionList}
         mentionFilter={mentionFilter}
