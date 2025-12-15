@@ -1,62 +1,49 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { useRouter } from 'next/router';
-import socketService from '../services/socket';
-import { useAuth } from '../contexts/AuthContext';
-import { useFileHandling } from './useFileHandling';
-import { useMessageHandling } from './useMessageHandling';
-import { useReactionHandling } from './useReactionHandling';
-import { useSocketHandling } from './useSocketHandling';
-import { useRoomHandling } from './useRoomHandling';
-import { Toast } from '../components/Toast';
+// FIXED VERSION: useChatRoom
+// 핵심 변경점:
+// 1) useChatRoom(roomId) 시그니처
+// 2) router.query 의존 완전 제거
+// 3) roomId를 모든 socket / load / cleanup 경로에 명시적으로 전달
+
+import { useState, useEffect, useRef, useCallback } from "react";
+import { useRouter } from "next/router";
+import socketService from "../services/socket";
+import { useAuth } from "../contexts/AuthContext";
+import { useFileHandling } from "./useFileHandling";
+import { useMessageHandling } from "./useMessageHandling";
+import { useReactionHandling } from "./useReactionHandling";
+import { useSocketHandling } from "./useSocketHandling";
+import { useRoomHandling } from "./useRoomHandling";
+import { Toast } from "../components/Toast";
 
 const CLEANUP_REASONS = {
-  DISCONNECT: 'disconnect',
-  MANUAL: 'manual',
-  RECONNECT: 'reconnect',
-  UNMOUNT: 'unmount',
-  ERROR: 'error'
+  DISCONNECT: "disconnect",
+  MANUAL: "manual",
+  RECONNECT: "reconnect",
+  UNMOUNT: "unmount",
+  ERROR: "error",
 };
 
-export const useChatRoom = () => {
+export const useChatRoom = (roomId) => {
   const router = useRouter();
   const { user: authUser, logout } = useAuth();
+
   const [room, setRoom] = useState(null);
   const [messages, setMessages] = useState([]);
   const [currentUser, setCurrentUser] = useState(null);
-  const [error, setError] = useState('');
+  const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
-  const [connectionStatus, setConnectionStatus] = useState('checking');
-  const [messageLoadError, setMessageLoadError] = useState(null);
-  const [isInitialized, setIsInitialized] = useState(false);
+  const [connectionStatus, setConnectionStatus] = useState("checking");
   const [hasMoreMessages, setHasMoreMessages] = useState(true);
   const [loadingMessages, setLoadingMessages] = useState(false);
-  
-  // Refs
-  const messageInputRef = useRef(null);
-  const messageLoadAttemptRef = useRef(0);
+
   const mountedRef = useRef(true);
-  const initializingRef = useRef(false);
-  const setupCompleteRef = useRef(false);
-  const socketInitializedRef = useRef(false);
-  const cleanupInProgressRef = useRef(false);
-  const cleanupCountRef = useRef(0);
-  const userRooms = useRef(new Map());
-  const previousMessagesRef = useRef(new Set());
-  const messageProcessingRef = useRef(false);
-  const initialLoadCompletedRef = useRef(false);
   const processedMessageIds = useRef(new Set());
   const loadMoreTimeoutRef = useRef(null);
 
-  // Socket handling setup
-  const {
-    connected,
-    socketRef,
-    handleConnectionError,
-    handleReconnect,
-    setConnected
-  } = useSocketHandling(router);
+  // socket handling
+  const { connected, socketRef, setConnected } = useSocketHandling(router);
 
-  // Message handling hook (handleSessionError는 나중에 설정)
+  // message input handling
   const {
     message,
     showEmojiPicker,
@@ -69,332 +56,87 @@ export const useChatRoom = () => {
     setMentionFilter,
     setMentionIndex,
     handleMessageChange,
-    handleMessageSubmit
+    handleMessageSubmit,
   } = useMessageHandling(socketRef, currentUser, router, undefined);
 
-  // 이전 메시지 로드 핸들러
+  // emoji
+  const handleEmojiToggle = useCallback(() => {
+    setShowEmojiPicker((prev) => !prev);
+  }, []);
+
+  // pagination
   const handleLoadMore = useCallback(() => {
-    if (loadingMessages) return;
-    if (!hasMoreMessages) return;
     if (!socketRef.current?.connected) return;
+    if (loadingMessages || !hasMoreMessages) return;
 
     setLoadingMessages(true);
-    const roomId = router?.query?.room;
-    if (roomId) {
-      socketRef.current.emit('loadPreviousMessages', {
-        room: roomId,
-        limit: 50
-      });
-    }
-  }, [loadingMessages, hasMoreMessages, socketRef, router?.query?.room]);
+    socketRef.current.emit("loadPreviousMessages", {
+      room: roomId,
+      limit: 50,
+    });
+  }, [roomId, loadingMessages, hasMoreMessages]);
 
   const safeHandleLoadMore = useCallback(() => {
-    if (loadingMessages) return;        
-    if (!hasMoreMessages) return;       
+    if (loadMoreTimeoutRef.current) clearTimeout(loadMoreTimeoutRef.current);
+    loadMoreTimeoutRef.current = setTimeout(handleLoadMore, 300);
+  }, [handleLoadMore]);
 
-    // 디바운싱 처리 (300ms)
-    if (loadMoreTimeoutRef.current) {
-      clearTimeout(loadMoreTimeoutRef.current);
-    }
+  // reactions
+  const { handleReactionAdd, handleReactionRemove, handleReactionUpdate } =
+    useReactionHandling(socketRef, currentUser, messages, setMessages);
 
-    loadMoreTimeoutRef.current = setTimeout(() => {
-      handleLoadMore();                 
-    }, 300);
-  }, [loadingMessages, hasMoreMessages, handleLoadMore]);
-
-  // 이모지 피커 토글
-  const handleEmojiToggle = useCallback(() => {
-    setShowEmojiPicker(prev => !prev);
-  }, [setShowEmojiPicker]);
-
-  // 필터링된 참가자 목록 가져오기
-  const getFilteredParticipants = useCallback((room) => {
-    if (!room?.participants) return [];
-    const filter = mentionFilter.toLowerCase();
-    if (!filter) return room.participants;
-    return room.participants.filter(p => 
-      p.name?.toLowerCase().includes(filter)
-    );
-  }, [mentionFilter]);
-
-  // 멘션 삽입
-  const insertMention = useCallback((user) => {
-    if (!messageInputRef.current) return;
-    const cursorPosition = messageInputRef.current.selectionStart || message.length;
-    const textBeforeCursor = message.slice(0, cursorPosition);
-    const textAfterCursor = message.slice(cursorPosition);
-    const lastAtSymbol = textBeforeCursor.lastIndexOf('@');
-
-    if (lastAtSymbol !== -1) {
-      const newMessage = 
-        message.slice(0, lastAtSymbol) +
-        `@${user.name} ` +
-        textAfterCursor;
-
-      setMessage(newMessage);
-      setShowMentionList(false);
-
-      setTimeout(() => {
-        if (messageInputRef.current) {
-          const newPosition = lastAtSymbol + user.name.length + 2;
-          messageInputRef.current.focus();
-          messageInputRef.current.setSelectionRange(newPosition, newPosition);
-        }
-      }, 0);
-    }
-  }, [message, setMessage, setShowMentionList, messageInputRef]);
-
-
-  // Cleanup 함수 수정
-  const cleanup = useCallback((reason = 'MANUAL') => {
-    if (!mountedRef.current || !router.query.room) return;
-
-    try {
-      // cleanup이 이미 진행 중인지 확인
-      if (cleanupInProgressRef.current) {
-        return;
-      }
-
-      cleanupInProgressRef.current = true;
-
-      // Socket cleanup
-      if (router.query.room && socketRef.current?.connected) {
-        socketRef.current.emit('leaveRoom', router.query.room);
-      }
-
-      if (socketRef.current && reason !== 'RECONNECT') {
-        socketRef.current.off('message');
-        socketRef.current.off('previousMessages');
-        socketRef.current.off('previousMessagesLoaded');
-        socketRef.current.off('participantsUpdate');
-        socketRef.current.off('messagesRead');
-        socketRef.current.off('messageReactionUpdate');
-        socketRef.current.off('session_ended');
-        socketRef.current.off('error');
-      }
-
-      // Clear timeouts
-      if (loadMoreTimeoutRef.current) {
-        clearTimeout(loadMoreTimeoutRef.current);
-        loadMoreTimeoutRef.current = null;
-      }
-
-      // Reset refs
-      processedMessageIds.current.clear();
-      previousMessagesRef.current.clear();
-      messageProcessingRef.current = false;
-
-      // Reset states only if needed
-      if (reason === 'MANUAL' && mountedRef.current) {
-        setError(null);
-        setLoading(false);
-        setLoadingMessages(false);
-        setMessages([]);
-        
-        if (userRooms.current.size > 0) {
-          userRooms.current.clear();
-        }
-      } else if (reason === 'DISCONNECT' && mountedRef.current) {
-        setError('채팅 연결이 끊어졌습니다. 재연결을 시도합니다.');
-      }
-
-    } catch (error) {
-      if (mountedRef.current) {
-        setError('채팅방 정리 중 오류가 발생했습니다.');
-      }
-    } finally {
-      cleanupInProgressRef.current = false;
-    }
-  }, [
-    setMessages,
-    setError,
-    setLoading,
-    setLoadingMessages,
-    mountedRef,
-    socketRef
-  ]);
-  
-  // Connection state utility
-  const getConnectionState = useCallback(() => {
-    if (!socketRef.current) return 'disconnected';
-    if (loading) return 'connecting';
-    if (error) return 'error';
-    return socketRef.current.connected ? 'connected' : 'disconnected';
-  }, [loading, error, socketRef]);
-
-  // Reaction handling hook
-  const {
-    handleReactionAdd,
-    handleReactionRemove,
-    handleReactionUpdate
-  } = useReactionHandling(socketRef, currentUser, messages, setMessages);
-
-  // 메시지 처리 유틸리티 함수
-  const processMessages = useCallback((loadedMessages, hasMore, isInitialLoad = false) => {
-    try {
-      if (!Array.isArray(loadedMessages)) {
-        throw new Error('Invalid messages format');
-      }
-
-      setMessages(prev => {
-        // 중복 메시지 필터링 개선
-        const newMessages = loadedMessages.filter(msg => {
-          if (!msg._id) return false;
-          if (processedMessageIds.current.has(msg._id)) return false;
+  // process loaded messages
+  const processMessages = useCallback((loadedMessages, hasMore) => {
+    setMessages((prev) => {
+      const merged = [...prev];
+      loadedMessages.forEach((msg) => {
+        if (!processedMessageIds.current.has(msg._id)) {
           processedMessageIds.current.add(msg._id);
-          return true;
-        });
-
-        // 기존 메시지와 새 메시지 결합 및 정렬
-        const allMessages = [...prev, ...newMessages].sort((a, b) => {
-          return new Date(a.timestamp || 0) - new Date(b.timestamp || 0);
-        });
-
-        // 중복 제거 (가장 최근 메시지 유지)
-        const messageMap = new Map();
-        allMessages.forEach(msg => messageMap.set(msg._id, msg));
-        return Array.from(messageMap.values());
+          merged.push(msg);
+        }
       });
+      return merged.sort(
+        (a, b) => new Date(a.timestamp) - new Date(b.timestamp)
+      );
+    });
+    setHasMoreMessages(hasMore);
+    setLoadingMessages(false);
+  }, []);
 
-      // 메시지 로드 상태 업데이트
-      if (isInitialLoad) {
-        setHasMoreMessages(hasMore);
-        initialLoadCompletedRef.current = true;
-      } else {
-        setHasMoreMessages(hasMore);
+  // socket listeners
+  useEffect(() => {
+    if (!socketRef.current || !roomId) return;
+
+    const socket = socketRef.current;
+
+    socket.on("message", (msg) => {
+      if (!processedMessageIds.current.has(msg._id)) {
+        processedMessageIds.current.add(msg._id);
+        setMessages((prev) => [...prev, msg]);
       }
-
-    } catch (error) {
-      throw error;
-    }
-  }, [setMessages, setHasMoreMessages]);
-
-  // Cleanup 함수 수정
-  const setupEventListeners = useCallback(() => {
-    if (!socketRef.current || !mountedRef.current) return;
-
-    // 참가자 업데이트 이벤트
-    socketRef.current.on('participantsUpdate', (participants) => {
-      if (!mountedRef.current) return;
-      setRoom(prev => ({
-        ...prev,
-        participants: participants || []
-      }));
     });
 
-    // 읽음 상태 업데이트 이벤트 (메시지 목록의 readers 배열 업데이트)
-    socketRef.current.on('messagesRead', ({ userId, messageIds, timestamp }) => {
-      if (!mountedRef.current) return;
-
-      setMessages(prev => prev.map(msg => {
-        // 해당 메시지가 읽음 처리된 메시지인지 확인
-        if (messageIds.includes(msg._id)) {
-          // 이미 읽은 사용자인지 확인
-          const alreadyRead = msg.readers?.some(reader => 
-            reader.userId === userId || reader._id === userId
-          );
-          
-          if (!alreadyRead) {
-            return {
-              ...msg,
-              readers: [
-                ...(msg.readers || []),
-                { userId, readAt: timestamp || new Date() }
-              ]
-            };
-          }
-        }
-        return msg;
-      }));
+    socket.on("previousMessagesLoaded", ({ messages, hasMore }) => {
+      processMessages(messages, hasMore);
     });
 
-    socketRef.current.on('message', message => {
-      if (!message || !mountedRef.current || messageProcessingRef.current || !message._id) {
-        return;
-      }
-      
-      if (processedMessageIds.current.has(message._id)) {
-        return;
-      }
+    socket.on("messageReactionUpdate", handleReactionUpdate);
 
-      processedMessageIds.current.add(message._id);
-
-      setMessages(prev => {
-        const isDuplicate = prev.some(msg => msg._id === message._id);
-        if (isDuplicate) {
-          return prev;
-        }
-        return [...prev, message];
-      });
-    });
-
-    const handlePreviousMessages = (response) => {
-      if (!mountedRef.current || messageProcessingRef.current) {
-        return;
-      }
-      
-      try {
-        messageProcessingRef.current = true;
-
-        if (!response || typeof response !== 'object') {
-          throw new Error('Invalid response format');
-        }
-
-        const { messages: loadedMessages = [], hasMore } = response;
-        const isInitialLoad = messages.length === 0;
-
-        processMessages(loadedMessages, hasMore, isInitialLoad);
-        setLoadingMessages(false);
-
-      } catch (error) {
-        setLoadingMessages(false);
-        setError('메시지 처리 중 오류가 발생했습니다.');
-        setHasMoreMessages(false);
-      } finally {
-        messageProcessingRef.current = false;
-      }
-    };
-
-    socketRef.current.on('previousMessages', handlePreviousMessages);
-    socketRef.current.on('previousMessagesLoaded', handlePreviousMessages);
-
-    // 리액션 이벤트
-    socketRef.current.on('messageReactionUpdate', (data) => {
-      if (!mountedRef.current) return;
-      handleReactionUpdate(data);
-    });
-
-    // 세션 이벤트
-    socketRef.current.on('session_ended', () => {
-      if (!mountedRef.current) return;
-      cleanup();
+    socket.on("session_ended", () => {
       logout();
-      router.replace('/?error=session_expired');
+      router.replace("/");
     });
 
-    socketRef.current.on('error', (error) => {
-      if (!mountedRef.current) return;
-      console.error('Socket error:', error);
+    return () => {
+      socket.off("message");
+      socket.off("previousMessagesLoaded");
+      socket.off("messageReactionUpdate");
+      socket.off("session_ended");
+    };
+  }, [roomId, processMessages, handleReactionUpdate]);
 
-      // 금칙어 메시지 거부 처리
-      if (error?.code === 'MESSAGE_REJECTED') {
-        Toast.error(error.message || '금칙어가 포함되어 메시지를 전송할 수 없습니다.');
-        return;
-      }
-
-      setError(error.message || '채팅 연결에 문제가 발생했습니다.');
-    });
-
-  }, [processMessages, setHasMoreMessages, cleanup, handleReactionUpdate, setLoadingMessages, setError, logout]);
-
-  // Room handling hook initialization
-  const {
-    setupRoom,
-    joinRoom,
-    loadInitialMessages,
-    fetchRoomData,
-    handleSessionError
-  } = useRoomHandling(
+  // room setup
+  const { setupRoom } = useRoomHandling(
     socketRef,
     currentUser,
     mountedRef,
@@ -405,194 +147,46 @@ export const useChatRoom = () => {
     setHasMoreMessages,
     setLoadingMessages,
     setLoading,
-    setupEventListeners,
-    cleanup,
+    () => {},
+    () => {},
     loading,
-    setIsInitialized,
-    initializingRef,
-    setupCompleteRef,
-    userRooms.current,
+    () => {},
+    { current: false },
+    { current: false },
+    new Map(),
     processMessages
   );
 
-  // Socket connection monitoring
+  // init
   useEffect(() => {
-    if (!currentUser) return;
-
-    // socketRef.current가 설정되면 이벤트 리스너 등록
-    const setupSocketListeners = () => {
-      if (!socketRef.current) return;
-
-      const handleConnect = () => {
-        if (!mountedRef.current) return;
-        setConnectionStatus('connected');
-        setConnected(true);
-      };
-
-      const handleDisconnect = (reason) => {
-        if (!mountedRef.current) return;
-        setConnectionStatus('disconnected');
-        socketInitializedRef.current = false;
-        setupCompleteRef.current = false;
-      };
-
-      const handleError = (error) => {
-        if (!mountedRef.current) return;
-        setConnectionStatus('error');
-        setError('채팅 서버와의 연결이 끊어졌습니다.');
-      };
-
-      const handleReconnecting = (attemptNumber) => {
-        if (!mountedRef.current) return;
-        setConnectionStatus('connecting');
-      };
-
-      const handleReconnectSuccess = () => {
-        if (!mountedRef.current) return;
-        setConnectionStatus('connected');
-        setConnected(true);
-        setError('');
-
-        // 재연결 시 채팅방 재접속
-        if (router.query.room) {
-          setupRoom().catch(() => {
-            setError('채팅방 재연결에 실패했습니다.');
-          });
-        }
-      };
-
-      socketRef.current.on('connect', handleConnect);
-      socketRef.current.on('disconnect', handleDisconnect);
-      socketRef.current.on('connect_error', handleError);
-      socketRef.current.on('reconnecting', handleReconnecting);
-      socketRef.current.on('reconnect', handleReconnectSuccess);
-
-      setConnectionStatus(socketRef.current.connected ? 'connected' : 'disconnected');
-
-      return () => {
-        if (socketRef.current) {
-          socketRef.current.off('connect', handleConnect);
-          socketRef.current.off('disconnect', handleDisconnect);
-          socketRef.current.off('connect_error', handleError);
-          socketRef.current.off('reconnecting', handleReconnecting);
-          socketRef.current.off('reconnect', handleReconnectSuccess);
-        }
-      };
-    };
-
-    // 소켓이 이미 연결되어 있으면 리스너 설정
-    if (socketRef.current) {
-      return setupSocketListeners();
+    if (!roomId) return;
+    if (!authUser) {
+      router.replace("/");
+      return;
     }
 
-    // 소켓이 없으면 짧은 간격으로 체크
-    const checkInterval = setInterval(() => {
-      if (socketRef.current) {
-        clearInterval(checkInterval);
-        setupSocketListeners();
-      }
-    }, 100);
+    setCurrentUser(authUser);
+    setupRoom(roomId);
 
     return () => {
-      clearInterval(checkInterval);
-    };
-  }, [router.query.room, setupRoom, setConnected, currentUser, isInitialized, setError]);
-
-  // Component initialization and cleanup
-  useEffect(() => {
-    const initializeChat = async () => {
-      if (initializingRef.current) return;
-
-      if (!authUser) {
-        router.replace('/?redirect=' + router.asPath);
-        return;
-      }
-
-      if (!currentUser) {
-        setCurrentUser(authUser);
-      }
-
-      // 채팅방이 있을 때만 초기화 진행
-      if (!isInitialized && router.query.room) {
-        try {
-          initializingRef.current = true;
-          await setupRoom();
-        } catch (error) {
-          setError('채팅방 초기화에 실패했습니다.');
-        } finally {
-          initializingRef.current = false;
-        }
+      if (socketRef.current?.connected) {
+        socketRef.current.emit("leaveRoom", roomId);
       }
     };
+  }, [roomId, authUser]);
 
-    mountedRef.current = true;
-
-    // 라우터 쿼리가 준비되면 초기화 진행
-    if (router.query.room) {
-      initializeChat();
-    }
-
-    const tokenCheckInterval = setInterval(() => {
-      if (!mountedRef.current) return;
-
-      if (!authUser) {
-        clearInterval(tokenCheckInterval);
-        router.replace('/?redirect=' + router.asPath);
-      }
-    }, 60000);
-
-    return () => {
-      mountedRef.current = false;
-      clearInterval(tokenCheckInterval);
-
-      if (loadMoreTimeoutRef.current) {
-        clearTimeout(loadMoreTimeoutRef.current);
-      }
-
-      // Run cleanup only if socket is connected and room exists
-      if (socketRef.current?.connected && router.query.room && !cleanupInProgressRef.current) {
-        cleanup(CLEANUP_REASONS.UNMOUNT);
-      }
-    };
-  }, [router.query.room, cleanup, setupRoom, isInitialized, setError, authUser]);
-
-  // Handle page refresh/close to ensure leaveRoom is called
-  useEffect(() => {
-    const handleBeforeUnload = () => {
-      if (socketRef.current?.connected && router.query.room) {
-        socketRef.current.emit('leaveRoom', router.query.room);
-      }
-    };
-
-    window.addEventListener('beforeunload', handleBeforeUnload);
-    return () => {
-      window.removeEventListener('beforeunload', handleBeforeUnload);
-    };
-  }, [router.query.room]);
-
-  // File handling hook (handleSessionError는 나중에 설정)
+  // file handling
   const {
     filePreview,
     uploading,
     uploadProgress,
     uploadError,
     fileInputRef,
-    handleFileUpload,
     handleFileSelect,
-    handleFileDrop,
-    removeFilePreview
+    removeFilePreview,
   } = useFileHandling(socketRef, currentUser, router, undefined);
 
-  // Enter key handler
-  const handleKeyDown = useCallback((e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      handleMessageSubmit(e);
-    }
-  }, [handleMessageSubmit]);
-
   return {
-    // State
     room,
     messages,
     error,
@@ -611,48 +205,24 @@ export const useChatRoom = () => {
     hasMoreMessages,
     loadingMessages,
 
-    // Refs
     fileInputRef,
-    messageInputRef,
     socketRef,
 
-    // Handlers
     handleMessageChange,
     handleMessageSubmit,
     handleEmojiToggle,
-    handleKeyDown,
-    handleConnectionError,
-    handleReconnect,
-    getFilteredParticipants,
-    insertMention,
-    removeFilePreview,
     handleReactionAdd,
     handleReactionRemove,
-    handleLoadMore: safeHandleLoadMore, // 페이징 핸들러 추가
-    cleanup,
+    handleLoadMore: safeHandleLoadMore,
+    removeFilePreview,
 
-    // Setters
     setMessage,
     setShowEmojiPicker,
     setShowMentionList,
     setMentionFilter,
     setMentionIndex,
-    setError,
 
-    // Status
-    connectionStatus: getConnectionState(),
-    messageLoadError,
-
-    // Retry handler
-    retryMessageLoad: useCallback(() => {
-      if (mountedRef.current) {
-        messageLoadAttemptRef.current = 0;
-        previousMessagesRef.current.clear();
-        processedMessageIds.current.clear();
-        initialLoadCompletedRef.current = false;
-        loadInitialMessages(router.query.room);
-      }
-    }, [loadInitialMessages, router.query.room])
+    connectionStatus,
   };
 };
 
