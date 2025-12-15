@@ -119,9 +119,58 @@ ssh ktb-fe01 "ps aux | grep 'node .next/standalone/server.js'"
 
 ---
 
+## ☁️ CloudFront 설정 (정적 내보내기용)
+
+### Custom Error Responses 설정
+
+정적 내보내기(`output: 'export'`)를 사용하는 경우, CloudFront에서 403/404 에러를 `/index.html`로 폴백시켜서 SPA처럼 동작하도록 설정해야 합니다.
+
+#### 설정 방법
+
+1. **CloudFront 콘솔 접속**
+   - AWS CloudFront 콘솔에서 해당 Distribution 선택
+
+2. **Error Pages 탭으로 이동**
+   - Distribution 상세 페이지에서 "Error Pages" 탭 클릭
+
+3. **Custom Error Response 생성**
+   - "Create Custom Error Response" 클릭
+   - 다음 설정 적용:
+     - **HTTP Error Code**: `403: Forbidden`
+     - **Customize Error Response**: `Yes`
+     - **Response Page Path**: `/index.html`
+     - **HTTP Response Code**: `200: OK`
+     - **Error Caching Minimum TTL**: `10` (초)
+
+4. **404 에러도 동일하게 설정**
+   - 다시 "Create Custom Error Response" 클릭
+   - 다음 설정 적용:
+     - **HTTP Error Code**: `404: Not Found`
+     - **Customize Error Response**: `Yes`
+     - **Response Page Path**: `/index.html`
+     - **HTTP Response Code**: `200: OK`
+     - **Error Caching Minimum TTL**: `10` (초)
+
+#### 동작 원리
+
+1. 사용자가 `/chat/123` 같은 동적 라우트에 직접 접근하거나 새로고침
+2. CloudFront가 해당 경로의 파일을 찾지 못해 403/404 반환
+3. Custom Error Response 설정에 따라 `/index.html`을 반환 (HTTP 200)
+4. 브라우저가 `index.html`을 로드하면 Next.js 라우터가 클라이언트 사이드에서 `/chat/123` 경로를 처리
+5. 결과적으로 정적 파일이 없어도 동적 라우트가 정상 작동
+
+#### 주의사항
+
+- **Response Code를 200으로 설정**: 403/404를 그대로 반환하면 브라우저가 에러 페이지로 인식할 수 있음
+- **Error Caching Minimum TTL**: 너무 길게 설정하면 변경사항이 반영되지 않을 수 있음 (10초 권장)
+- **배포 후 테스트**: 설정 후 `/chat/123` 같은 동적 라우트에 직접 접근하여 새로고침 시에도 정상 작동하는지 확인
+
+---
+
 ## 📝 관련 파일
 
 - `package.json`: 빌드 스크립트 정의
 - `Makefile`: 배포 자동화 스크립트
 - `restart.sh`: 서버 재시작 스크립트
 - `next.config.js`: Next.js standalone 출력 설정
+- `pages/_app.js`: 클라이언트 사이드 라우팅 처리
